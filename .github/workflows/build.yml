@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 ldid 与 Theos
+        run: |
+          brew install ldid xz make 2>/dev/null || brew install ldid xz
+          export THEOS=$HOME/theos
+          git clone --recursive --depth 1 https://github.com/theos/theos.git $THEOS
+          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: 编译 dylib
+        run: |
+          make clean 2>/dev/null || true
+          make -j4
+
+      - name: 收集产物
+        run: |
+          mkdir -p out
+          find . -name "*.dylib" -not -path "./out/*" -exec cp {} out/ \;
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DYFudai-dylib
+          path: out/*.dylib
+          if-no-files-found: error

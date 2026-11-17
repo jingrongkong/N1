@@ -1,0 +1,30 @@
+{
+  "enabled": false,
+  "tapMode": "view",
+  "hidUsePixels": false,
+
+  "searchKeywords": ["福袋", "抽奖", "发福袋"],
+  "roomTitleKeywords": ["福袋", "抽奖", "红包", "福利"],
+  "luckyBagKeywords": ["福袋", "抽奖", "红包雨", "幸运袋"],
+  "participateKeywords": ["立即参与", "立即抽奖", "参与抽奖", "点击参与", "参与", "立即领取"],
+  "doneKeywords": ["已参与", "已参加", "已领", "等待开奖", "已抢光"],
+  "conditionKeywords": ["关注主播", "加入粉丝团", "发送弹幕", "发送口令", "观看"],
+
+  "enterWait": 3.0,
+  "roomStaySeconds": 45,
+  "maxRoomsPerRound": 30,
+  "maxRoomsPerHour": 60,
+
+  "jitterMin": 0.6,
+  "jitterMax": 1.8,
+
+  "autoFollow": false,
+  "autoJoinFansClub": false,
+  "autoComment": false,
+  "commentText": "福袋",
+
+  "showFloatingPanel": true,
+
+  "bagHotspotX": 0,
+  "bagHotspotY": 0
+}

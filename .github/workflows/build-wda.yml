@@ -1,0 +1,80 @@
+name: build-wda
+
+# 在 GitHub 的 macOS 26 runner 上编译 WebDriverAgent，产出未签名的 ipa
+# 免费额度足够（私有仓库每月 2000 分钟，macOS 按 10 倍计 ≈ 200 分钟；这个任务约 10 分钟）
+# 用法：仓库里点 Actions -> build-wda -> Run workflow -> 跑完下载 Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      xcode_path:
+        description: '指定 Xcode（留空用默认，例：/Applications/Xcode_26.4.1.app）'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: macos-26
+
+    steps:
+      - name: 环境信息
+        run: |
+          sw_vers
+          xcodebuild -version
+
+      - name: 切换 Xcode（可选）
+        if: ${{ inputs.xcode_path != '' }}
+        run: |
+          sudo xcode-select -s "${{ inputs.xcode_path }}"
+          xcodebuild -version
+
+      - name: 拉取 WebDriverAgent
+        run: |
+          git clone --depth 1 https://github.com/appium/WebDriverAgent.git
+          cd WebDriverAgent && git log -1 --oneline
+
+      - name: 编译（不签名，签名交给 Sideloadly）
+        run: |
+          cd WebDriverAgent
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ./out \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            2>&1 | tail -60
+
+      - name: 打包成 ipa
+        run: |
+          set -e
+          APP=$(find WebDriverAgent/out/Build/Products -maxdepth 2 \
+                -name 'WebDriverAgentRunner-Runner.app' | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::没找到 WebDriverAgentRunner-Runner.app，看看上面的编译日志"
+            find WebDriverAgent/out/Build/Products -maxdepth 3 -type d | head -30
+            exit 1
+          fi
+          echo "产物: $APP"
+          mkdir -p pkg/Payload
+          cp -R "$APP" pkg/Payload/
+          BID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+                "$APP/Info.plist" 2>/dev/null || echo "")
+          echo "bundle id: $BID"
+          if [ "$BID" != "com.facebook.WebDriverAgentRunner.xctrunner" ]; then
+            echo "::error::bundle id 不对（$BID），Sideloadly 签名后 wdaproxy 会找不到进程"
+            exit 1
+          fi
+          cd pkg && zip -qry ../WebDriverAgentRunner.ipa Payload
+          cd ..
+          ls -lh WebDriverAgentRunner.ipa
+          unzip -l WebDriverAgentRunner.ipa | tail -8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WebDriverAgent-unsigned-ipa
+          path: WebDriverAgentRunner.ipa
+          if-no-files-found: error
