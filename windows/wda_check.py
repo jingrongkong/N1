@@ -34,7 +34,8 @@ except ImportError:
     print("缺少 requests：pip install requests")
     sys.exit(3)
 
-BUNDLE_ID = "com.facebook.WebDriverAgentRunner.xctrunner"
+DEFAULT_BUNDLE = "com.facebook.WebDriverAgentRunner.xctrunner"
+BUNDLE_ID = DEFAULT_BUNDLE   # 运行时会被实际探测到的值覆盖
 
 
 def say(msg=""):
@@ -63,6 +64,50 @@ def dev_udid():
                 say("      " + l)
         return None
     return data[0].split()[0]
+
+
+def list_bundles(udid):
+    """列出设备上已安装应用的 bundle id"""
+    try:
+        r = subprocess.run([sys.executable, "-m", "tidevice", "-u", udid, "applist"],
+                           capture_output=True, timeout=120)
+    except Exception:
+        return []
+    out = (r.stdout or b"").decode("utf-8", "replace")
+    ids = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or " " not in line:
+            continue
+        bid = line.split()[0]
+        if "." in bid and not bid.startswith("["):
+            ids.append(bid)
+    return ids
+
+
+def detect_bundle(udid, override=None):
+    """
+    探测设备上 WDA 的真实 bundle id。
+
+    Sideloadly 用免费 Apple ID 签名时，若默认 App ID 注册失败会给 bundle id 加后缀
+    （如 ...xctrunner2），写死默认值会让 wdaproxy 报 "process not found"。
+    """
+    if override:
+        say(f"[*] 使用指定 bundle id: {override}")
+        return override
+
+    ids = list_bundles(udid)
+    hits = [b for b in ids if "webdriveragent" in b.lower()]
+    if len(hits) == 1:
+        say(f"[+] 设备上的 WDA bundle id: {hits[0]}")
+        return hits[0]
+    if len(hits) > 1:
+        say(f"[!] 设备上有多个 WDA（{', '.join(hits)}），用第一个")
+        return hits[0]
+
+    say(f"[!] 设备上没找到 WebDriverAgent，按默认 id 试: {DEFAULT_BUNDLE}")
+    say("    若下面启动失败，说明还没装或用 Sideloadly 装成了别的 id")
+    return DEFAULT_BUNDLE
 
 
 def find_ipa(explicit=None):
@@ -99,10 +144,10 @@ def install(ipa, udid):
     return True
 
 
-def start_wdaproxy(port, udid):
+def start_wdaproxy(port, udid, bundle=BUNDLE_ID):
     """后台起 wdaproxy，返回 Popen"""
     cmd = [sys.executable, "-m", "tidevice", "-u", udid, "wdaproxy",
-           "-p", str(port), "-B", BUNDLE_ID]
+           "-p", str(port), "-B", bundle]
     say(f"[*] 启动 WDA: {' '.join(cmd[3:])}")
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return p
@@ -126,7 +171,7 @@ def wait_ready(port, timeout=120):
     return False, last
 
 
-def diagnose(proxy_proc, port):
+def diagnose(proxy_proc, port, bundle=BUNDLE_ID):
     """超时后给出可操作的诊断"""
     say("")
     say("— 诊断 —")
@@ -141,8 +186,9 @@ def diagnose(proxy_proc, port):
             say("  " + l)
     low = out.lower()
     if "not found" in low or "no such" in low or "unable to launch" in low:
-        say("  → WDA 没装到设备上，或 bundle id 不是 " + BUNDLE_ID)
-        say("    用 Sideloadly 重新签名安装，然后不带 --no-install 再跑一次")
+        say("  → WDA 没装到设备上，或 bundle id 不是 " + bundle)
+        say("    用 Sideloadly 重新签名安装；装完可以用 --bundle 手动指定实际 id")
+        say("    查实际 id：python -m tidevice applist | findstr /i webdriver")
     elif "developer" in low or "not trusted" in low:
         say("  → 开发者模式没开，或证书没被信任")
         say("    设置 → 隐私与安全性 → 开发者模式；设置 → 通用 → VPN与设备管理 → 信任")
@@ -165,6 +211,7 @@ def main():
     ap.add_argument("--port", type=int, default=8100)
     ap.add_argument("--timeout", type=int, default=120, help="等待就绪秒数")
     ap.add_argument("--keep", action="store_true", help="验证成功后保留 wdaproxy 进程")
+    ap.add_argument("--bundle", default=None, help="手动指定 WDA 的 bundle id（默认自动探测）")
     args = ap.parse_args()
 
     say("=" * 52)
@@ -176,16 +223,19 @@ def main():
         return 3
     say(f"[+] 设备: {udid}")
 
+    bundle = detect_bundle(udid, args.bundle)
+
     if not args.no_install:
         ipa = find_ipa(args.ipa)
         if not ipa:
             say("[!] 没找到 ipa。把它放到当前目录，或直接把路径作为参数传进来")
             say("    已经装过 WDA 的话，加 --no-install 跳过安装")
             return 3
+        say("[*] 注意：未签名的 ipa 无法直接安装，Sideloadly 会同时完成签名+安装")
         if not install(ipa, udid):
             return 1
 
-    proxy = start_wdaproxy(args.port, udid)
+    proxy = start_wdaproxy(args.port, udid, bundle)
     try:
         say(f"[*] 等待 WDA 就绪（最多 {args.timeout}s）...")
         ok, info = wait_ready(args.port, args.timeout)
@@ -206,7 +256,7 @@ def main():
             return 0
         say("")
         say(f"[!] {args.timeout}s 内未就绪（最后状态: {info}）")
-        diagnose(proxy, args.port)
+        diagnose(proxy, args.port, bundle)
         return 2
     finally:
         if not args.keep and proxy.poll() is None:
