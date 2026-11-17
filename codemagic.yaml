@@ -1,0 +1,84 @@
+# Codemagic CI 配置：编译 WebDriverAgent 并产出未签名 ipa
+#
+# 为什么用这个而不是 GitHub Actions：
+#   GitHub 托管的 macOS runner 经常排 15 分钟队还分不到机器（免费层优先级最低）。
+#   Codemagic 免费层给 500 分钟/月独立 Mac mini M2，Xcode 26.6，不跟人抢。
+#
+# 用法：
+#   1. codemagic.io 用 GitHub 账号注册
+#   2. Add application -> 选 N1 仓库 -> 选 "codemagic.yaml" 配置方式
+#   3. Start new build -> 选 build-wda
+#   4. 跑完在 Artifacts 里下 WebDriverAgentRunner.ipa
+#
+# 注意：这里只编译不签名。签名交给 Windows 上的 Sideloadly，用你的免费 Apple ID。
+
+workflows:
+  build-wda:
+    name: Build WebDriverAgent (unsigned ipa)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      xcode: 26.6
+      vars:
+        WDA_REPO: "https://github.com/appium/WebDriverAgent.git"
+        EXP_BUNDLE_ID: "com.facebook.WebDriverAgentRunner.xctrunner"
+
+    scripts:
+      - name: 环境信息
+        script: |
+          set -e
+          sw_vers
+          xcodebuild -version
+
+      - name: 拉取 WebDriverAgent
+        script: |
+          set -e
+          git clone --depth 1 "$WDA_REPO"
+          cd WebDriverAgent
+          echo "WDA commit: $(git log -1 --oneline)"
+
+      - name: 编译（不签名）
+        script: |
+          set -eo pipefail
+          cd WebDriverAgent
+          xcodebuild build-for-testing \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ./out \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            2>&1 | tail -80
+
+      - name: 打包成 ipa 并校验 bundle id
+        script: |
+          set -e
+          APP=$(find WebDriverAgent/out/Build/Products -maxdepth 2 \
+                -name 'WebDriverAgentRunner-Runner.app' | head -1)
+          if [ -z "$APP" ]; then
+            echo "没找到 WebDriverAgentRunner-Runner.app，产物目录："
+            find WebDriverAgent/out/Build/Products -maxdepth 3 -type d | head -30
+            exit 1
+          fi
+          echo "产物: $APP"
+
+          BID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+                "$APP/Info.plist" 2>/dev/null || echo "")
+          echo "bundle id: $BID"
+          if [ "$BID" != "$EXP_BUNDLE_ID" ]; then
+            echo "bundle id 不匹配（期望 $EXP_BUNDLE_ID），Sideloadly 签名后 wdaproxy 会找不到进程"
+            exit 1
+          fi
+
+          rm -rf pkg && mkdir -p pkg/Payload
+          cp -R "$APP" pkg/Payload/
+          cd pkg && zip -qry ../WebDriverAgentRunner.ipa Payload
+          cd ..
+          ls -lh WebDriverAgentRunner.ipa
+          unzip -l WebDriverAgentRunner.ipa | tail -6
+
+    artifacts:
+      - WebDriverAgentRunner.ipa
