@@ -1,13 +1,15 @@
 name: build
 
+# 注意：这是「自签注入」旧路线的构建（产出 DYFudai.dylib）。
+# 当前主路线是 windows/ 下的 WDA 外部驱动，不需要本 workflow。
+# 因此改为只手动触发：不再随 push 自动跑，省时间也省 Actions 额度。
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-14
+    # macOS 14 镜像已于 2026-11-02 全面下线，改用 macos-15
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
